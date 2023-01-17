@@ -151,7 +151,8 @@ export class CloudSyncManager {
 
   private _pipeline: SyncTask[] = [];
   private initialized = false;
-  private _uploadingIds: Set<string>;
+  private _uploadingIds: Set<string> = new Set();
+  private _onUploadStateChanged: Signal<boolean>;
 
   constructor(
     workspace: string,
@@ -161,6 +162,8 @@ export class CloudSyncManager {
     onUploadFinished: Signal<BlobId>
   ) {
     this._onUploadFinished = onUploadFinished;
+    this._onUploadFinished = onUploadFinished;
+    this._onUploadStateChanged = onUploadStateChanged;
     this._fetcher = ky.create({
       prefixUrl,
       signal: this._abortController.signal,
@@ -227,7 +230,7 @@ export class CloudSyncManager {
   }
 
   private async _handleTaskRetry(task: SyncTask, status?: BlobStatus) {
-    this._uploadingIds.delete(task.id);
+    this._removeUploadId(task.id);
     if (status?.exists) {
       await this._pending.delete(task.id);
       this._onUploadFinished.emit(task.id);
@@ -255,8 +258,11 @@ export class CloudSyncManager {
             `${this._workspace}/blob/${task.id}`
           );
           if (resp.status === 404) {
-            this._pending.set(task.id, { type: 'upload', retry: task.retry });
-            this._uploadingIds.add(task.id);
+            await this._pending.set(task.id, {
+              type: 'upload',
+              retry: task.retry,
+            });
+            this._addUploadId(task.id);
             const status = await this._fetcher
               .put(`${this._workspace}/blob`, { body: task.blob, retry: 3 })
               .json<BlobStatus>();
@@ -271,6 +277,16 @@ export class CloudSyncManager {
     }
 
     console.error('CloudSyncManager taskRunner exited');
+  }
+
+  private _addUploadId(id: BlobId) {
+    this._uploadingIds.add(id);
+    this._onUploadStateChanged.emit(!!this._uploadingIds.size);
+  }
+
+  private _removeUploadId(id: BlobId) {
+    this._uploadingIds.delete(id);
+    this._onUploadStateChanged.emit(!!this._uploadingIds.size);
   }
 
   async get(id: BlobId): Promise<BlobURL | null> {
